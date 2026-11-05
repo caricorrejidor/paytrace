@@ -43,7 +43,8 @@
 | **Caso** | El escenario con el que se generó la operación (tabla de §3). Las reglas **no** conocen el caso: solo ven el trace |
 | **Causa** | Uno de los valores de la columna "Causa" de la tabla de casos, con ese nombre exacto, o "no concluyente" |
 | **Diagnóstico** | Lo que devuelve PayTrace cuando el analista lo pide. Tiene 3 campos: causa, eventos citados (por ID de evento; vacío si la causa es "no concluyente") y recomendación |
-| **Conjunto de evaluación** | 20 operaciones fijas: 5 de cada caso de la tabla de §3, salvo el caso OK. Son siempre las mismas entre versiones |
+| **Conjunto de evaluación** | 25 operaciones fijas: 5 de cada caso de la tabla de §3, salvo el caso OK. Salen de un archivo de datos fijo, con IDs y horarios que no cambian entre corridas. No se generan con RF-01 |
+| **Plazo de espera** | 10 minutos sin eventos nuevos desde el último evento del trace. Una transferencia inmediata se resuelve en segundos: si pasó ese tiempo sin eventos, la operación se trabó |
 
 ---
 
@@ -52,9 +53,9 @@
 | ID | Objetivo | Meta | Cómo se mide | Resuelve el dolor de… |
 |---|---|---|---|---|
 | OBJ-1 | Investigar más rápido | **≤ 5 min** por caso (hoy ~20 min, estimación de referencia) | Mediana de 10 operaciones del conjunto de evaluación, cronometradas por una persona que no las generó, desde que busca el ID hasta que tiene el diagnóstico | Seguir el ID log por log |
-| OBJ-2 | Diagnósticos con evidencia | **100 %** de los diagnósticos con causa citan exactamente un evento: el evento clave de su caso | Sobre las 15 operaciones con trace completo del conjunto de evaluación | El diagnóstico no cita qué evento lo prueba |
+| OBJ-2 | Diagnósticos con evidencia | **100 %** de los diagnósticos con causa citan exactamente un evento: el evento clave de su caso | Sobre las 20 operaciones con trace completo del conjunto de evaluación | El diagnóstico no cita qué evento lo prueba |
 | OBJ-3 | No inventar | **100 %** de las operaciones con trace incompleto terminan como "no concluyente" | Sobre las 5 operaciones con trace incompleto del conjunto de evaluación | Diagnósticos sin respaldo |
-| OBJ-4 | Causa correcta | **100 %** con la causa igual al caso generado | Sobre las 15 operaciones con trace completo del conjunto de evaluación | Causas distintas según el analista |
+| OBJ-4 | Causa correcta | **100 %** con la causa que corresponde al caso generado | Sobre las 20 operaciones con trace completo del conjunto de evaluación | Causas distintas según el analista |
 
 ---
 
@@ -68,8 +69,8 @@
 | RF-04 | Mostrar el trace de una operación en orden cronológico | Imprescindible | OBJ-1 |
 | RF-05 | Indicar como causa una de las causas de la tabla de casos, según el evento clave del trace | Imprescindible | OBJ-1 · OBJ-4 |
 | RF-06 | Citar, por su ID, solo el evento clave del trace que prueba la causa | Imprescindible | OBJ-2 |
-| RF-07 | Mostrar la recomendación de la tabla de casos que corresponde a la causa | Imprescindible | OBJ-1 |
-| RF-08 | Responder "no concluyente", sin eventos citados, cuando el trace no prueba ninguna causa | Imprescindible | OBJ-3 |
+| RF-07 | Mostrar la recomendación de la tabla de casos que corresponde al trace | Imprescindible | OBJ-1 |
+| RF-08 | Responder "no concluyente", sin eventos citados, cuando el trace no prueba ninguna causa y ya pasó el plazo de espera | Imprescindible | OBJ-3 |
 | RF-09 | Avisar que no hay fallo cuando se pide el diagnóstico de una operación OK | Imprescindible | Principio de producto (no diagnosticar sin fallo) · se verifica con AC-10, fuera del conjunto de evaluación |
 
 ### Casos que se pueden generar (RF-01)
@@ -79,8 +80,9 @@
 | OK | OK | Orden enviada → débito en origen → aceptación del proveedor → **acreditación en destino** | — (no se investiga) | — |
 | Fondos insuficientes | Fallida | Orden enviada → **rechazo en origen, código AM04** | fondos insuficientes | Avisar al cliente que no tenía saldo. No se debitó nada |
 | Cuenta incorrecta | Fallida | Orden enviada → débito en origen → **rechazo del banco destino, código AC01** → reversa del débito | cuenta incorrecta | Pedir al cliente que verifique el CBU/CVU y confirmar que la reversa se acreditó |
-| Timeout | Fallida | Orden enviada → débito en origen → envío al proveedor → **rechazo por timeout, código AB05** (el proveedor informa que el banco destino no respondió a tiempo) | timeout | Verificar si se revirtió el débito antes de reintentar: si no se revirtió, el reintento podría cobrarse dos veces |
-| Trace incompleto | Pendiente | Orden enviada → débito en origen → (no hay ningún evento más que explique el estado) | no concluyente | Pedir los logs del proveedor desde el último evento conocido |
+| Timeout con reversa | Fallida | Orden enviada → débito en origen → envío al proveedor → **rechazo por timeout, código AB05** (el proveedor informa que el banco destino no respondió a tiempo) → reversa del débito | timeout | El débito ya se devolvió: se puede reintentar la transferencia |
+| Timeout sin reversa | Fallida | Orden enviada → débito en origen → envío al proveedor → **rechazo por timeout, código AB05** (el proveedor informa que el banco destino no respondió a tiempo) | timeout | El débito todavía no se devolvió: pedir la reversa antes de reintentar. Si se reintenta antes, se cobra dos veces |
+| Trace incompleto | Pendiente | Orden enviada → débito en origen → (pasaron más de 10 minutos sin ningún evento más) | no concluyente | Pedir los logs del proveedor desde el último evento conocido |
 
 ### Flujo principal (demo)
 
@@ -126,7 +128,8 @@ Característica: PayTrace, criterios de aceptación del MVP
       | OK                   | OK        | acreditación en destino                 | acreditación en destino          |
       | fondos insuficientes | fallida   | rechazo en origen, código AM04          | rechazo en origen, código AM04   |
       | cuenta incorrecta    | fallida   | rechazo del banco destino, código AC01  | reversa del débito               |
-      | timeout              | fallida   | rechazo por timeout, código AB05        | rechazo por timeout, código AB05 |
+      | timeout con reversa  | fallida   | rechazo por timeout, código AB05        | reversa del débito               |
+      | timeout sin reversa  | fallida   | rechazo por timeout, código AB05        | rechazo por timeout, código AB05 |
       | trace incompleto     | pendiente | débito en origen                        | débito en origen                 |
 
   Escenario: AC-02 (RF-02) · Ver el estado de cada operación
@@ -158,7 +161,8 @@ Característica: PayTrace, criterios de aceptación del MVP
       | caso                 | causa                |
       | fondos insuficientes | fondos insuficientes |
       | cuenta incorrecta    | cuenta incorrecta    |
-      | timeout              | timeout              |
+      | timeout con reversa  | timeout              |
+      | timeout sin reversa  | timeout              |
 
   Esquema del escenario: AC-07 (RF-06) · Evidencia del trace
     Dado que se generó una operación del caso "<caso>"
@@ -170,7 +174,8 @@ Característica: PayTrace, criterios de aceptación del MVP
       | caso                 | evento_clave                           |
       | fondos insuficientes | rechazo en origen, código AM04         |
       | cuenta incorrecta    | rechazo del banco destino, código AC01 |
-      | timeout              | rechazo por timeout, código AB05       |
+      | timeout con reversa  | rechazo por timeout, código AB05       |
+      | timeout sin reversa  | rechazo por timeout, código AB05       |
 
   Esquema del escenario: AC-08 (RF-07) · Recomendación según la causa
     Dado que se generó una operación del caso "<caso>"
@@ -181,7 +186,8 @@ Característica: PayTrace, criterios de aceptación del MVP
       | caso                 |
       | fondos insuficientes |
       | cuenta incorrecta    |
-      | timeout              |
+      | timeout con reversa  |
+      | timeout sin reversa  |
       | trace incompleto     |
 
   Escenario: AC-09 (RF-08) · No concluyente
@@ -202,6 +208,12 @@ Característica: PayTrace, criterios de aceptación del MVP
     Cuando busca
     Entonces el sistema muestra "Ingresá un ID con formato OP-0000"
     Y no hace la búsqueda
+
+  Escenario: AC-12 (RF-08) · Operación pendiente dentro del plazo de espera
+    Dado una operación pendiente cuyo último evento fue hace 2 minutos
+    Cuando el analista pide el diagnóstico
+    Entonces el sistema muestra "La operación sigue en curso"
+    Y no se genera ningún diagnóstico
 ```
 
 ---
@@ -216,7 +228,7 @@ Característica: PayTrace, criterios de aceptación del MVP
 | Corregir o reintentar la operación: PayTrace solo diagnostica |
 | Agente de IA para los casos que las reglas no cubren: queda para después del MVP |
 | Login, roles y permisos |
-| Paginación de la lista de operaciones (en el MVP hay unas 20) |
+| Paginación de la lista de operaciones (en el MVP hay unas 25) |
 | Pagos con tarjeta u otros medios: solo transferencias |
 | Otros casos de fallo (importe no permitido `AM02`, duplicados, antifraude, etc.) |
 
@@ -228,7 +240,7 @@ Característica: PayTrace, criterios de aceptación del MVP
 | Riesgo | Mitigación |
 |---|---|
 | Un trace real no encaja en ninguna regla | PayTrace responde "no concluyente" y no inventa una causa (RF-08 · AC-09). Para esos casos, a futuro, un agente de IA |
-| Se usa mal un código ISO 20022 | El simulador usa solo 3 códigos de motivo, revisados el 04/11 contra la guía de códigos de motivo del European Payments Council: AM04 (fondos insuficientes), AC01 (la cuenta no existe en el banco destino) y AB05 (timeout del banco destino). Los demás códigos del brief (`AM02`, `AB06`) quedan fuera del MVP |
+| Se usa mal un código ISO 20022 | El simulador usa solo 3 códigos de motivo, revisados el 04/11 contra la guía de códigos de motivo del European Payments Council: AM04 (fondos insuficientes), AC01 (la cuenta no existe en el banco destino) y AB05 (timeout del banco destino). Cualquier otro código (por ejemplo, `AM02` o `AB06`) queda fuera del MVP (ver §6) |
 | Los datos simulados no se parecen a la realidad | Los casos siguen la lógica de ISO 20022. Los ~20 min de hoy son una estimación de referencia, no una medición: OBJ-1 se cumple midiendo PayTrace (≤ 5 min), sin depender de esa cifra |
 | El proyecto queda demasiado grande para el curso | MVP acotado: 9 RF, 3 casos con fallo y fuera de alcance explícito |
 
